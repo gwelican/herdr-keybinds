@@ -72,3 +72,17 @@ without a TTY to get a plain-text listing instead (useful for scripts and CI).
 User-configured keys render in green, built-in defaults in blue, unbound in dim.
 The plugin reads config at popup open — after editing config, reload and reopen
 the popup to see changes.
+
+## Releasing
+
+1. Bump `version` in `herdr-plugin.toml`.
+2. Commit, tag, push:
+
+   ```sh
+   git commit -am "release vX.Y.Z"
+   git tag vX.Y.Z
+   git push origin main vX.Y.Z
+   ```
+
+Installers track `main` by default; pinned installs use
+`herdr plugin install gwelican/herdr-keybinds --ref vX.Y.Z`.
