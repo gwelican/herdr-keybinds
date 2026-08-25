@@ -6,6 +6,8 @@ defaults, your `[keys]` overrides, and **every keybound plugin action** (with
 its plugin name and action title resolved). Flags collisions and highlights
 filter matches as you type.
 
+![Keybind Browser demo](docs/keybinds.gif)
+
 ## Install
 
 ```sh
@@ -60,18 +62,18 @@ without a TTY to get a plain-text listing instead (useful for scripts and CI).
 - `[keys.*]` entries from your config, including array-valued keys (every
   binding shown as one row) and `""` values rendered as `unbound`.
 - **Plugin keybinds** — every `[[keys.command]]` bound with
-  `type = "plugin_action"` is listed, resolved to the plugin's display name
-  and action title (via `herdr plugin list`) and tagged with the plugin id,
-  so you can filter the whole list by plugin (e.g. `beads`). Plugins don't
-  self-register keybinds in Herdr — this shows exactly what *your* config
-  binds to their actions.
+  `type = "plugin_action"` is listed, resolved to the action title (via
+  `herdr plugin list`) and prefixed with its `[plugin id]`, so each row
+  starts with where the binding comes from. You can filter the whole list by
+  plugin (e.g. `beads`). Plugins don't self-register keybinds in Herdr —
+  this shows exactly what *your* config binds to their actions.
 - Other `[[keys.command]]` entries (`shell`, `pane`, `popup`), tagged by type.
 - Legacy `[keys.indexed]` bindings.
 - Collisions (same key bound twice) are flagged with a `⚠` note.
 
-User-configured keys render in green, built-in defaults in blue, unbound in dim.
-The plugin reads config at popup open — after editing config, reload and reopen
-the popup to see changes.
+User-configured keys render in green, built-in defaults in blue, unbound in
+dim, plugin prefixes in purple. The plugin reads config at popup open —
+after editing config, reload and reopen the popup to see changes.
 
 ## Releasing
 

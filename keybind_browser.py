@@ -270,11 +270,7 @@ def build_entries(config, defaults, pmap):
                 plugin, _action_id = qualified.rsplit(".", 1)
                 info = pmap.get(qualified)
                 if not desc:
-                    desc = (
-                        "%s (%s)" % (info[1], info[0])
-                        if info
-                        else "Plugin action: %s" % qualified
-                    )
+                    desc = info[1] if info else "Plugin action: %s" % qualified
             elif not desc:
                 desc = "Plugin action: %s" % (qualified or command)
         else:
@@ -326,6 +322,7 @@ C_KEY_USER = "\x1b[1;38;5;114m"   # user-configured key
 C_KEY_BUILTIN = "\x1b[1;38;5;75m" # builtin key
 C_UNBOUND = "\x1b[2;38;5;244m"    # unbound
 C_DIM = "\x1b[38;5;245m"          # tag chips, footer
+C_PLUGIN = "\x1b[1;38;5;141m"     # plugin prefix
 C_NOTE = "\x1b[2;38;5;244m"       # collision notes
 C_MATCH = "\x1b[1;38;5;220m"      # filter match highlight
 C_BOLD = "\x1b[1m"                # active row description
@@ -462,10 +459,14 @@ def row_segments(e, key_w, tokens, active):
     else:
         segs.append(("unbound", C_UNBOUND))
         segs.append((pad, None))
+    if e.get("plugin"):
+        prefix = "[" + e["plugin"] + "] "
+        for chunk, matched in hl_chunks(prefix, tokens):
+            segs.append((chunk, C_MATCH if matched else C_PLUGIN))
     desc_style = C_BOLD if active else None
     for chunk, matched in hl_chunks(e["desc"], tokens):
         segs.append((chunk, C_MATCH if matched else desc_style))
-    if e["tag"]:
+    if e["tag"] and not e.get("plugin"):
         segs.append(("  [" + e["tag"] + "]", C_DIM))
     if e.get("note") and not e["keys"]:
         segs.append(("  ⚠ " + e["note"], C_NOTE))
@@ -496,9 +497,14 @@ def main():
     if not sys.stdout.isatty():
         for e in entries:
             keyd = " | ".join(k for k in e["keys"] if k) or "unbound"
-            extra = "  [%s]" % e["tag"] if e["tag"] else ""
+            if e.get("plugin"):
+                desc = "[%s] %s" % (e["plugin"], e["desc"])
+                extra = ""
+            else:
+                desc = e["desc"]
+                extra = "  [%s]" % e["tag"] if e["tag"] else ""
             note = "  ⚠ %s" % e["note"] if e.get("note") and not e["keys"] else ""
-            print("%-30s  %s%s%s" % (keyd, e["desc"], extra, note))
+            print("%-30s  %s%s%s" % (keyd, desc, extra, note))
         return 0
 
     W, H = shutil.get_terminal_size((120, 40))
