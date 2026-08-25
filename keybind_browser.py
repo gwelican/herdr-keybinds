@@ -14,6 +14,8 @@ Sources merged:
 Keys:
   type        filter (all tokens must match somewhere in the row)
   backspace   delete filter char
+  ctrl-w      delete word backward (also ctrl+backspace)
+  ctrl-k      clear filter
   ctrl-u      clear filter
   up/down     move selection
   pgup/pgdn   page
@@ -316,8 +318,21 @@ def build_entries(config, defaults, pmap):
 
 # ---------------------------------------------------------------- TUI -----
 
-STYLE = {"bold": "\x1b[1m", "dim": "\x1b[2m", "reset": "\x1b[0m"}
+RESET = "\x1b[0m"
+C_TITLE = "\x1b[1;38;5;51m"       # title, active filter
+C_SEP = "\x1b[38;5;240m"          # separator rules
+C_MARK = "\x1b[1;38;5;51m"        # selection marker
+C_KEY_USER = "\x1b[1;38;5;114m"   # user-configured key
+C_KEY_BUILTIN = "\x1b[1;38;5;75m" # builtin key
+C_UNBOUND = "\x1b[2;38;5;244m"    # unbound
+C_DIM = "\x1b[38;5;245m"          # tag chips, footer
+C_NOTE = "\x1b[2;38;5;244m"       # collision notes
+C_MATCH = "\x1b[1;38;5;220m"      # filter match highlight
+C_BOLD = "\x1b[1m"                # active row description
+
 ESC_RE = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]")
+MOTION = {"A": "up", "B": "down", "C": "right", "D": "left", "H": "home", "F": "end"}
+CSI_MOTION = re.compile(r"1;\d+([A-DHF])")  # kitty keyboard-protocol motion
 
 
 def read_event(fd):
@@ -327,13 +342,18 @@ def read_event(fd):
         return None
     c = b[0]
     if c == 0x1B:
-        r, _, _ = select.select([fd], [], [], 0.05)
+        r, _, _ = select.select([fd], [], [], 0.1)
         if not r:
             return ("esc",)
         b2 = os.read(fd, 1)
+        if not b2:
+            return ("esc",)
         if b2[0] in (0x5B, 0x4F):  # CSI "[" or SS3 "O"
             seq = b""
             while True:
+                r, _, _ = select.select([fd], [], [], 0.1)
+                if not r:
+                    break
                 cb = os.read(fd, 1)
                 if not cb:
                     break
@@ -341,19 +361,18 @@ def read_event(fd):
                 if 0x40 <= cb[0] <= 0x7E:
                     break
             s = seq.decode("latin1")
-            final = s[-1]
-            if s == "[5~":
+            if s in ("5~", "5;5~"):
                 return ("pageup",)
-            if s == "[6~":
+            if s in ("6~", "6;5~"):
                 return ("pagedown",)
-            return {
-                "A": "up",
-                "B": "down",
-                "C": "right",
-                "D": "left",
-                "H": "home",
-                "F": "end",
-            }.get(final, "unknown")
+            if s in ("3~", "3;5~"):
+                return ("wordback",)  # ctrl+backspace / xterm delete
+            if s in MOTION:
+                return (MOTION[s],)
+            m = CSI_MOTION.fullmatch(s)
+            if m:
+                return (MOTION[m.group(1)],)
+            return ("unknown",)
         return ("esc",)
     if c in (0x0D, 0x0A):
         return ("enter",)
@@ -363,6 +382,10 @@ def read_event(fd):
         return ("ctrlc",)
     if c == 0x15:  # ctrl-u
         return ("clear",)
+    if c == 0x17:  # ctrl-w
+        return ("wordback",)
+    if c == 0x2B:  # ctrl-k
+        return ("killline",)
     if c >= 0x20:
         if c < 0x80:
             return ("char", chr(c))
@@ -384,32 +407,79 @@ def read_event(fd):
     return ("unknown",)
 
 
-def row_segments(e, key_w):
+def word_backspace(q):
+    """Delete the word before the end of the filter (plus its trailing spaces)."""
+    i = len(q)
+    while i > 0 and q[i - 1] == " ":
+        i -= 1
+    while i > 0 and q[i - 1] != " ":
+        i -= 1
+    return q[:i]
+
+
+def hl_chunks(text, tokens):
+    """Split text into [(chunk, matched)] for case-insensitive token matches."""
+    if not text or not tokens:
+        return [(text, False)]
+    low = text.lower()
+    marks = [False] * len(text)
+    for t in tokens:
+        if not t:
+            continue
+        start = 0
+        while True:
+            i = low.find(t, start)
+            if i < 0:
+                break
+            for j in range(i, i + len(t)):
+                marks[j] = True
+            start = i + len(t)
+    chunks = []
+    cur, cur_m = "", marks[0]
+    for ch, m in zip(text, marks):
+        if cur and m != cur_m:
+            chunks.append((cur, cur_m))
+            cur = ""
+        cur += ch
+        cur_m = m
+    if cur:
+        chunks.append((cur, cur_m))
+    return chunks
+
+
+def row_segments(e, key_w, tokens, active):
     keyd = " | ".join(k for k in e["keys"] if k)
-    segs = [("  ", "")]
-    if keyd:
-        segs.append((keyd.ljust(key_w), "bold"))
+    pad = " " * max(key_w - len(keyd), 0)
+    if active:
+        segs = [(C_MARK + "▸" + RESET, None), (" ", None)]
     else:
-        segs.append(("unbound".ljust(key_w), "dim"))
-    segs.append(("  " + e["desc"], ""))
+        segs = [("  ", None)]
+    if keyd:
+        color = C_KEY_USER if e["source"] == "user" else C_KEY_BUILTIN
+        for chunk, matched in hl_chunks(keyd, tokens):
+            segs.append((chunk, C_MATCH if matched else color))
+        segs.append((pad, None))
+    else:
+        segs.append(("unbound", C_UNBOUND))
+        segs.append((pad, None))
+    desc_style = C_BOLD if active else None
+    for chunk, matched in hl_chunks(e["desc"], tokens):
+        segs.append((chunk, C_MATCH if matched else desc_style))
     if e["tag"]:
-        segs.append(("  [%s]" % e["tag"], "dim"))
+        segs.append(("  [" + e["tag"] + "]", C_DIM))
     if e.get("note") and not e["keys"]:
-        segs.append(("  " + e["note"], "dim"))
+        segs.append(("  ⚠ " + e["note"], C_NOTE))
     return segs
 
 
 def draw_segments(segs, width):
     out = []
     remaining = width
-    for text, style in segs:
+    for text, sgr in segs:
         if remaining <= 0:
             break
         cut = text[:remaining]
-        if style:
-            out.append(STYLE[style] + cut + STYLE["reset"])
-        else:
-            out.append(cut)
+        out.append(sgr + cut + RESET if sgr else cut)
         remaining -= len(cut)
     if remaining > 0:
         out.append(" " * remaining)
@@ -426,27 +496,38 @@ def main():
     if not sys.stdout.isatty():
         for e in entries:
             keyd = " | ".join(k for k in e["keys"] if k) or "unbound"
-            print("%-30s  %s%s" % (keyd, e["desc"], "  [%s]" % e["tag"] if e["tag"] else ""))
+            extra = "  [%s]" % e["tag"] if e["tag"] else ""
+            note = "  ⚠ %s" % e["note"] if e.get("note") and not e["keys"] else ""
+            print("%-30s  %s%s%s" % (keyd, e["desc"], extra, note))
         return 0
 
     W, H = shutil.get_terminal_size((120, 40))
-    all_keys = [" | ".join(k for k in e["keys"] if k) for e in entries]
+    all_keys = [
+        " | ".join(k for k in e["keys"] if k) or "unbound" for e in entries
+    ]
     longest = max((len(k) for k in all_keys), default=0)
     key_w = min(max(longest, 10), 30)
+    row_w = W - 2
 
     state = {"query": "", "sel": 0, "view": 0}
 
+    def tokens():
+        return [t for t in state["query"].lower().split() if t]
+
     def filtered():
-        tokens = state["query"].lower().split()
-        if not tokens:
+        toks = tokens()
+        if not toks:
             return entries
-        return [e for e in entries if all(t in e["hay"] for t in tokens)]
+        return [e for e in entries if all(t in e["hay"] for t in toks)]
+
+    def visible_len(s):
+        return len(ESC_RE.sub("", s))
 
     def render():
         rows = filtered()
         sel = state["sel"]
         view = state["view"]
-        avail = max(H - 2, 1)
+        avail = max(H - 4, 1)
         if not rows:
             sel = view = 0
         else:
@@ -456,25 +537,39 @@ def main():
             if sel >= view + avail:
                 view = sel - avail + 1
         state["sel"], state["view"] = sel, view
+        toks = tokens()
+        query = state["query"]
 
-        out = []
-        header = "\x1b[1;36mkeybinds\x1b[0m  \x1b[2m?\x1b[0m %s\x1b[7m \x1b[0m" % state["query"]
-        tail = "\x1b[2m%d/%d\x1b[0m" % (len(rows), len(entries))
-        gap = max(1, W - ESC_RE.sub("", header).__len__() - len(ESC_RE.sub("", tail)) - 1)
-        out.append(header + " " * gap + tail)
+        head = C_TITLE + "keybinds" + RESET
+        if query:
+            head += "  " + C_TITLE + "? " + query + RESET
+            tail = C_DIM + "%d/%d" % (len(rows), len(entries)) + RESET
+        else:
+            tail = C_DIM + "%d bindings" % len(entries) + RESET
+        gap = max(1, row_w - visible_len(head) - visible_len(tail))
+        out = [head + " " * gap + tail]
+        out.append(C_SEP + "─" * row_w + RESET)
 
         for i, e in enumerate(rows[view : view + avail]):
-            line = draw_segments(row_segments(e, key_w), W - 2)
-            if i == sel - view:
-                line = "\x1b[7m" + line + " \x1b[0m"
-            out.append(line)
-        while len(out) < H - 1:
-            out.append(" " * (W - 2))
-        footer = (
-            "\x1b[2mtype to filter \u00b7 \u2191/\u2193 move \u00b7 pgup/pgdn page \u00b7 "
-            "esc clear/close \u00b7 enter close\x1b[0m"
-        )
-        out.append(footer[: W - 2])
+            out.append(
+                draw_segments(
+                    row_segments(e, key_w, toks, i == sel - view), row_w
+                )
+            )
+        while len(out) < H - 2:
+            out.append(" " * row_w)
+        out.append(C_SEP + "─" * row_w + RESET)
+
+        fsegs = []
+        if query:
+            fsegs.append(("filter ", C_DIM))
+            fsegs.append(("? " + query, C_TITLE))
+        fsegs.append((
+            "   ·   ↑↓ move · pgup/pgdn page · home/end · "
+            "⌫/ctrl+w word · ctrl+u line · esc clear · enter close",
+            C_DIM,
+        ))
+        out.append(draw_segments(fsegs, row_w))
         sys.stdout.write("\x1b[H" + "\n".join(out) + "\x1b[J")
         sys.stdout.flush()
 
@@ -497,7 +592,7 @@ def main():
             kind = ev[0]
             rows = filtered()
             last = max(len(rows) - 1, 0)
-            page = max(H - 2, 1)
+            page = max(H - 4, 1)
             if kind in ("enter", "ctrlc"):
                 break
             elif kind == "esc":
@@ -507,7 +602,9 @@ def main():
                     break
             elif kind == "backspace":
                 state["query"] = state["query"][:-1]
-            elif kind == "clear":
+            elif kind == "wordback":
+                state["query"] = word_backspace(state["query"])
+            elif kind in ("clear", "killline"):
                 state["query"] = ""
             elif kind == "char":
                 state["query"] += ev[1]
