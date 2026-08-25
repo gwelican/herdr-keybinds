@@ -1,0 +1,29 @@
+# herdr-keybinds - a popup that lists every configured Herdr keybinding.
+#
+# One entrypoint: the `browser` popup. Open it from a keybind bound to the
+# `open` action (see README), or from the palette. The list merges your config
+# with Herdr's built-in defaults and live-filters as you type.
+
+id = "gwelican.keybinds"
+name = "Keybind Browser"
+version = "0.1.0"
+min_herdr_version = "0.7.0"
+description = "Popup listing every configured Herdr keybinding, live-filtered by key, description, or plugin."
+platforms = ["linux", "macos"]
+
+# No build step: pure stdlib Python 3.
+
+[[panes]]
+id = "browser"
+title = "Keybind Browser"
+placement = "popup"
+width = 100
+height = 32
+command = ["bash", "-c", "exec python3 \"$HERDR_PLUGIN_ROOT/keybind_browser.py\""]
+
+# The action a user keybind points at: opens the browser popup and focuses it.
+[[actions]]
+id = "open"
+title = "Keybind Browser: open"
+contexts = ["workspace", "global"]
+command = ["bash", "-c", "exec \"${HERDR_BIN_PATH:-herdr}\" plugin pane open --plugin gwelican.keybinds --entrypoint browser --placement popup --focus"]
