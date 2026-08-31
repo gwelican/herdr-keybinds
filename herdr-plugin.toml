@@ -6,7 +6,7 @@
 
 id = "gwelican.keybinds"
 name = "Keybind Browser"
-version = "0.1.1"
+version = "0.2.0"
 min_herdr_version = "0.7.0"
 description = "Popup listing every configured Herdr keybinding, live-filtered by key, description, or plugin."
 platforms = ["linux", "macos"]
